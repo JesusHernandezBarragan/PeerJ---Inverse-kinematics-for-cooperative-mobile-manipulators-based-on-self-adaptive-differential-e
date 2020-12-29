@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: alumno.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: alumno.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * @module "alumno.js"
+ * @desc Módulo para la creacion de todas las operaciones del campus virtual, relacionadas con el alumno.&lt;br>&lt;br>
+ * Reglas: Para todas las peticiones es obligatorio [token(?), wsalumno, action(int)]&lt;br>&lt;br>
+ * @author CICL 11-11-2020
+ * 
+ * 
+ */
+exports.start = function (utils, response, state) {
+	/***WS FOR deliverys ***/
+	var README = {
+		RULES: 'In all requests is obligatory [token(?), wsalumno, action(int)]',
+		ACT_1: 'GET | Lista de materias por plan de estudios, sin considerar division o departamento [id_plan int]',
+		FOUND: 'Nothing..'
+	}
+	state.mod = 'wsalumno';
+	utils.log(state, 'wsalumno: ' + state.pid + ':' + state.taskId + ' Using pool connection id=' + state.connection.threadId + ' APLY:' + new Date());
+	if ((typeof state != 'undefined') &amp;&amp; (typeof state.queryData != 'undefined')) {
+
+		switch (state.queryData.action) {
+			case '1': lista_materias(utils, response, state); break;
+
+			default:
+				console.log('wsalumno: main close conection [pid] ' + state.pid);
+				state.connection.release();
+				state.result.status = 200;
+				state.result.message = 'Hello, please readme before to use [the params in lowercase]';
+				README.FOUND = 'Sorry your option is wrong, your try action: ' + state.queryData.action;
+				state.result.readme = README;
+				utils.sendOutput(response, state);
+				break;
+		}
+
+	} else {
+		console.log('wsalumno:main close conection [pid] ' + state.pid);
+		state.connection.release();
+		state.result.status = 200;
+		state.result.message = 'please readme before to use ';
+		state.result.readme = JSON.stringify(README);
+		// state.set(200,'please readme before to use ');
+		utils.sendOutput(response, state);
+	}
+};
+
+
+/**
+ * Obtener nombre y correo de los expertos de determinada materia y se los agrega al objeto materia, en su correspondiente registro
+ * 
+ * @param { Object } utils - 
+ * @param { Object } state - 
+ * @param { Object } response - 
+ * @param { Object } materia - Información de una materia, (contiene clave, id_plan, id_depto, nombre y objetivo de un registro de una materia en particular)
+ * @return { Object } - Objeto materia con el registro de los expertos para dicha materia.
+ */
+var info_materia_expertos = (utils, state, response, materia) => {
+	return new Promise((resolve, reject) => {
+		var query = "SELECT CONCAT_WS('',campus_directorio.persona.nombre,campus_directorio.persona.segundoNombre,campus_directorio.persona.apellidoPaterno,campus_directorio.persona.apellidoMaterno) as nombre_completo, campus_directorio.persona.email FROM campus_virtual.experto INNER join campus_virtual.empleado INNER JOIN campus_virtual.exp_mat INNER JOIN campus_directorio.persona where campus_directorio.persona.id = campus_virtual.empleado.persona_fk AND campus_virtual.experto.empleado = campus_virtual.empleado.id and campus_virtual.experto.id = campus_virtual.exp_mat.experto and campus_virtual.exp_mat.materia = '" + materia.clave + "'";
+		//var query3 = "SELECT * FROM archivo where rutaDoc IN (SELECT rutaDoc FROM `archivo` WHERE id IN ("+ids+")) and extBase = '.pdf' and tabla = 'EDIC'" ;
+		utils.log(state, query);
+		state.connection.query(query, function (err, rows) {
+			if (!err) {
+				if (typeof rows[0] != 'undefined') {
+					materia.expertos = rows;
+					resolve(materia);
+				} else {
+					resolve();
+				}
+			} else {
+				state.connection.release();
+				state.set(500, 'Error de base de datos ', 'getData:: Database error' + err);
+				utils.sendOutput(response, state);
+				reject();
+				// return [];
+			}
+
+		});
+	});
+}
+/**
+ * Consulta del plan de estudios, se obtiene un listado de todas las materias de un plan de estudios determinado 
+ *
+ * @param { Object } utils -
+ * @param { Object } response -
+ * @param { Object } state - Este objeto contiene "state.queryData.id_plan" que es el que contiene el identificador del plan, NOTA: sin el no se puede usar el servicio
+ */
+function lista_materias(utils, response, state) {
+
+	if (state.method == 'GET') {
+
+		if (typeof state.queryData.id_plan != 'undefined') {
+			utils.log(state, 'CAMPUS -Entrando a listado de materias ');
+
+			var query = 'SELECT * FROM campus_virtual.materia where plan =' + state.queryData.id_plan;
+			//cambiar la conexion para asegurarnos que este en bd correcta
+			state.connection.changeUser({ database: 'campus_virtual' }, function (err) {
+				state.connection.query(query, function (err, rows) {
+
+					if (!err) {
+						if (typeof rows != 'undefined') {
+							state.result.materias = rows;
+
+							var promesas = [];
+							state.result.materias.forEach((value, index) => {
+								console.log('index' + index);
+								console.log(value);
+								promesas.push(info_materia_expertos(utils, state, response, value));
+							});
+
+							Promise.all(promesas).then((respuestas) => {
+								console.log(respuestas);
+								state.result.materias = respuestas;
+								state.connection.release();
+
+								state.set(200, 'Entrega listado de materias con éxito');
+								//si solo se hara una consulta asegurar el cierre para evitar hilos colgados
+								utils.sendOutput(response, state);
+							});
+
+						} else {
+							state.result.materias = [];
+							state.set(200, 'Sin datos.', 'lista_materias query: ' + query);
+							utils.sendOutput(response, state);
+							state.connection.release();
+						}
+					} else {
+						state.set(500, 'Tuvimos un inconveniente, revise PID: ' + state.pid, 'lista_materias: 500 / se encontro un error: ' + err + ' query: ' + query);
+						utils.sendOutput(response, state);
+						state.connection.release();
+					}
+				});
+			});
+		} else {
+			console.log('lista_materias close conection [pid] ' + state.pid)
+			state.connection.release();
+			state.set(412, 'Falta información en la solicitud.', 'lista_materias missing parameters.');
+			utils.sendOutput(response, state);
+		}
+	} else {
+		console.log('permisos close conection [pid] ' + state.pid)
+		state.connection.release();
+		state.set(400, 'El servicio que busca, no existe.', 'Missing uid parameter');
+		utils.sendOutput(response, state);
+	}
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Campus Virtual</a></h2><h3>Modules</h3><ul><li><a href="module-_alumno.js_.html">"alumno.js"</a></li><li><a href="module-_publico.js_.html">"publico.js"</a></li></ul><h3>Global</h3><ul><li><a href="global.html#update_info_user">update_info_user</a></li><li><a href="global.html#update_perfil">update_perfil</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.6</a> on Tue Nov 24 2020 16:35:32 GMT-0600 (GMT-06:00)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
